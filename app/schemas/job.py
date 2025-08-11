@@ -1,5 +1,4 @@
 from pydantic import BaseModel
-
 class JobData(BaseModel):
     job_title: str
     department: str
