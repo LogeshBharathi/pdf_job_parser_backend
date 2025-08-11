@@ -8,3 +8,4 @@ class JobData(BaseModel):
     salary: str
     application_deadline: str
     application_url: str
+
