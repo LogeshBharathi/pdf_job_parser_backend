@@ -1,25 +1,36 @@
 import fitz  # PyMuPDF
 import re
 import json
-import requests
 import os
 import time
+import google.generativeai as genai
 from typing import Dict, Any, Optional, List
-from app.schemas.job import JobData
 from dotenv import load_dotenv
+
+# Note: The original code had an import 'from app.schemas.job import JobData'
+# which is not used in the class. It can be removed if not needed elsewhere.
 
 class JobPDFParser:
     """
-    A robust, generic PDF parser for extracting key information from government job notifications.
-    This version uses a generative model for more reliable data extraction and has an improved regex fallback.
+    A robust, generic PDF parser for extracting key information from job notifications.
+    This version uses Gemini 1.5 Flash in JSON mode for reliable data extraction
+    and includes a regex fallback.
     """
     def __init__(self):
         load_dotenv()
-        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        # Ensure your .env file has: GEMINI_API_KEY="your_actual_api_key"
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
         self.retry_delays = [1, 2, 4, 8, 16] # Exponential backoff delays
 
+        # Configure Gemini API
+        if self.gemini_api_key:
+            genai.configure(api_key=self.gemini_api_key)
+            self.model = genai.GenerativeModel('gemini-1.5-flash')
+        else:
+            self.model = None
+
     def extract_all_text(self, pdf_content: bytes) -> str:
-        """Extract all text from PDF using pymupdf."""
+        """Extract all text from PDF using PyMuPDF."""
         text = ""
         try:
             with fitz.open(stream=pdf_content, filetype="pdf") as doc:
@@ -39,15 +50,16 @@ class JobPDFParser:
 
     def parse_pdf_with_llm(self, pdf_content: bytes) -> Dict[str, Any]:
         """
-        Extracts key job information by sending the raw text to the OpenRouter generative model.
-        This is the primary parsing method.
+        Extracts key job information using the Gemini model with guaranteed JSON output.
+        This is the primary and most reliable parsing method.
         """
-        raw_text = self.extract_all_text(pdf_content)
-        truncated_text = raw_text[:25000]
-
-        if not self.openrouter_api_key:
-            print("Warning: OpenRouter API key not found. Falling back to regex parser.")
+        if not self.model:
+            print("Warning: Gemini API key not found or model not initialized. Falling back to regex parser.")
             return self.parse_pdf_with_regex(pdf_content)
+
+        raw_text = self.extract_all_text(pdf_content)
+        # Truncate text to avoid exceeding model token limits for very large PDFs
+        truncated_text = raw_text[:30000]
 
         prompt = (
             f"You are an expert data extraction AI. From the following raw text extracted from a government job notification PDF, "
@@ -56,96 +68,83 @@ class JobPDFParser:
             f"JSON Keys to extract:\n"
             f"- 'job_title': The official name of the post(s).\n"
             f"- 'department': The name of the ministry or department conducting the recruitment.\n"
-            f"- 'vacancies': The total number of vacancies.\n"
+            f"- 'vacancies': The total number of vacancies. Extract a number if possible.\n"
             f"- 'eligibility': A combined summary of the required age limits AND educational qualifications. Search for sections like 'Age Limit' and 'Educational Qualifications'.\n"
             f"- 'salary': A summary of the pay scale, including level and initial pay. Actively look for keywords like 'Pay Level', 'Scale of Pay', 'Rs.', or 'Pay Matrix'.\n"
-            f"- 'application_deadline': The closing date for applications.\n"
+            f"- 'application_deadline': The closing date for applications. Format as YYYY-MM-DD if possible, otherwise keep the original text.\n"
             f"- 'application_url': The official website for applications. Look for text like 'Candidates must apply online through' or website domains ending in '.gov.in' or '.nic.in'.\n\n"
             f"Instructions:\n"
-            f"- If a field is genuinely not found after a thorough search, use the string 'Not specified'. Do not use null.\n"
-            f"- The output MUST be a valid JSON object, without any other text or explanations. \n\n"
+            f"- If a field is genuinely not found after a thorough search, use the string 'Not specified'.\n"
+            f"- The output MUST be a valid JSON object. Do not output any other text or explanations.\n\n"
             f"--- PDF TEXT START ---\n{truncated_text}\n--- PDF TEXT END ---"
         )
-        
-        headers = {
-            "Authorization": f"Bearer {self.openrouter_api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "openai/gpt-3.5-turbo",
-            "messages": [
-                {"role": "system", "content": "You are an expert at extracting information from job notification PDFs and returning it in a clean JSON format."},
-                {"role": "user", "content": prompt}
-            ],
-            "response_format": {"type": "json_object"}
-        }
-        api_url = "https://openrouter.ai/api/v1/chat/completions"
+
+        # Configure the model to output JSON directly
+        generation_config = genai.types.GenerationConfig(
+            response_mime_type="application/json"
+        )
 
         for delay in self.retry_delays:
             try:
-                response = requests.post(api_url, headers=headers, json=payload, timeout=90)
-                response.raise_for_status()
-                result = response.json()
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config=generation_config
+                )
 
-                if result.get("choices") and result["choices"][0]["message"]["content"]:
-                    llm_response_text = result["choices"][0]["message"]["content"]
-                    job_info = json.loads(llm_response_text)
+                # Check if the response was blocked by safety filters
+                if not response.parts:
+                    block_reason = response.prompt_feedback.block_reason
+                    print(f"API call blocked due to: {block_reason}. This is a permanent failure for this prompt.")
+                    break # No point in retrying if blocked
 
-                    # --- FIX: Sanitize all values to strings before returning ---
-                    sanitized_job_info = {}
-                    for key, value in job_info.items():
-                        if value is not None:
-                            sanitized_job_info[key] = str(value)
-                        else:
-                            sanitized_job_info[key] = 'Not specified'
+                # The model's response text is already a JSON string
+                job_info = json.loads(response.text)
 
-                    sanitized_job_info["raw_text"] = raw_text[:1000]
-                    return sanitized_job_info
-                else:
-                    raise ValueError("OpenRouter response did not contain valid content.")
-            except (requests.exceptions.RequestException, json.JSONDecodeError, ValueError) as e:
-                print(f"API call failed: {e}. Retrying in {delay} seconds...")
+                # Sanitize all values to strings before returning
+                sanitized_job_info = {k: str(v) if v is not None else 'Not specified' for k, v in job_info.items()}
+                sanitized_job_info["raw_text"] = raw_text[:1000] # Include a snippet for reference
+                return sanitized_job_info
+
+            except json.JSONDecodeError as e:
+                print(f"API call failed (JSONDecodeError): {e}. Retrying in {delay} seconds...")
                 time.sleep(delay)
-        
-        # If all retries fail, fall back to regex
+            except Exception as e:
+                print(f"An unexpected API error occurred: {e}. Retrying in {delay} seconds...")
+                time.sleep(delay)
+
+        # If all retries fail or the prompt was blocked, fall back to regex
         print("All API retries failed. Falling back to regex parser.")
         return self.parse_pdf_with_regex(pdf_content)
 
     def parse_pdf_with_regex(self, pdf_content: bytes) -> Dict[str, Any]:
         """
-        A fallback regex-based parsing logic with more robust patterns.
+        A fallback regex-based parsing logic. Used if the LLM fails.
         """
         raw_text = self.extract_all_text(pdf_content)
-        cleaned_text = re.sub(r' +', ' ', raw_text)
-        cleaned_text = re.sub(r'\s*\n\s*', '\n', cleaned_text)
-        cleaned_text = cleaned_text.strip()
-        
+        # Basic text cleaning for better regex matching
+        cleaned_text = re.sub(r'\s*\n\s*', '\n', raw_text.strip())
+        cleaned_text = re.sub(r' +', ' ', cleaned_text)
+
         patterns = {
             'job_title': [r"recruitment for the post of\s*(.+?)(?:\n|$)", r"RECRUITMENT OF (.+?)(?:\n|$)", r"CEN NO\. \d+/\d+ \((.+?)\)"],
             'department': [r"(?i)(government of india|ministry of .+?|department of .+?|railway recruitment board)"],
             'vacancies': [r"total vacancies\s*[:\-]?\s*(\d+)", r"grand total\s*[:\-]?\s*(\d+)"],
-            'eligibility': [r"(?is)(?:5.0\s+AGE LIMIT|6.0\s+EDUCATIONAL QUALIFICATIONS)(.+?)(?=\n\d+\.0|\n\n[A-Z])"],
-            'salary': [r"(?is)(?:SCALE OF PAY|PAY LEVEL)(.+?)(?=\n\d+\.0|\n\n[A-Z])"],
+            'eligibility': [r"(?is)(?:5.0\s+AGE LIMIT|6.0\s+EDUCATIONAL QUALIFICATIONS|essential qualifications)(.+?)(?=\n\d+\.0|\n\n[A-Z])"],
+            'salary': [r"(?is)(?:SCALE OF PAY|PAY LEVEL|PAY MATRIX)(.+?)(?=\n\d+\.0|\n\n[A-Z])"],
             'application_deadline': [r"closing date.*?submission of.*?application.*?\n?([^\n]+)"],
             'application_url': [r"apply online through the website\s*([^\s]+)"]
         }
-        
+
         job_info = {
-            'job_title': self.extract_field(cleaned_text, patterns['job_title']),
-            'department': self.extract_field(cleaned_text, patterns['department']),
-            'vacancies': self.extract_field(cleaned_text, patterns['vacancies']),
-            'eligibility': self.extract_field(cleaned_text, patterns['eligibility']),
-            'salary': self.extract_field(cleaned_text, patterns['salary']),
-            'application_deadline': self.extract_field(cleaned_text, patterns['application_deadline']),
-            'application_url': self.extract_field(cleaned_text, patterns['application_url']),
+            key: self.extract_field(cleaned_text, pat)
+            for key, pat in patterns.items()
         }
-        
-        final_job_info = {}
-        for key, value in job_info.items():
-            if value is None:
-                final_job_info[key] = 'Not specified'
-            else:
-                final_job_info[key] = str(value)
-        
+
+        # Ensure all values are strings and replace None with 'Not specified'
+        final_job_info = {
+            key: str(value) if value is not None else 'Not specified'
+            for key, value in job_info.items()
+        }
+
         final_job_info['raw_text'] = cleaned_text[:1000]
         return final_job_info

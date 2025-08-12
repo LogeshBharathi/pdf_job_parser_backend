@@ -92,10 +92,10 @@ Follow these steps to get a local copy of the project up and running.
 
    ```env
    # .env
-   OPENROUTER_API_KEY="your_api_key_here"
+   GEMINI_API_KEY="your_gemini_api_key_here"
    ```
 
-   Note: Replace "your_api_key_here" with your actual key from the OpenRouter dashboard.
+   Note: Replace "your_gemini_api_key_here" with your actual Gemini API key from the Google AI Studio.
 
 4. Run the FastAPI server:
    The server will run with automatic reloading for development.
@@ -119,4 +119,4 @@ This project is configured for easy deployment on Render using a `render.yaml` f
    ```bash
    poetry run uvicorn app.main:app --host 0.0.0.0 --port $PORT
    ```
-6. Add `OPENROUTER_API_KEY` as a secret environment variable in your service settings.
+6. Add `GEMINI_API_KEY` as a secret environment variable in your service settings.
