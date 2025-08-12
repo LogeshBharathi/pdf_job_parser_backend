@@ -13,7 +13,7 @@ class JobPDFParser:
     """
     def __init__(self):
         # It's recommended to use environment variables for API keys for better security.
-        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "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")
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "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")
 
     def extract_all_text(self, pdf_content: bytes) -> str:
         """Extract all text from PDF using pymupdf."""
