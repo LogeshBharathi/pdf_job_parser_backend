@@ -4,6 +4,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from datetime import datetime
 from dotenv import load_dotenv
 import os
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
@@ -16,6 +17,17 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# --- CORS Middleware Configuration ---
+# Allows requests from any origin, which is useful for public APIs
+# or when your frontend is hosted on a different domain.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
+
 # Custom Swagger UI with dark theme and branding
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
@@ -24,11 +36,11 @@ async def custom_swagger_ui_html():
         title="📄 Job Parser API Docs",
         swagger_favicon_url="https://fastapi.tiangolo.com/img/favicon.png",
         swagger_ui_parameters={
-            "defaultModelsExpandDepth": -1,  # hide schemas by default
-            "defaultModelRendering": "model",  # render as model first
-            "docExpansion": "none",  # collapse endpoints by default
-            "syntaxHighlight.theme": "monokai",  # dark syntax highlight
-            "persistAuthorization": True  # keep auth token between refresh
+            "defaultModelsExpandDepth": -1,
+            "defaultModelRendering": "model",
+            "docExpansion": "none",
+            "syntaxHighlight.theme": "monokai",
+            "persistAuthorization": True
         }
     )
 
