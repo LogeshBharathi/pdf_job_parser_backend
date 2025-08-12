@@ -1,6 +1,3 @@
-Here's the content formatted as a Markdown (.md) file that you can copy-paste into your `README.md`:
-
-````markdown
 # Job Notification PDF Parser Backend
 
 This project is a robust FastAPI backend designed to intelligently extract and summarize key information from government job notification PDFs. It uses a hybrid parsing approach, combining the power of a generative AI model (OpenRouter) for dynamic content extraction with a regex-based parser as a reliable fallback.
@@ -64,7 +61,7 @@ A successful response will return a JSON object with the extracted job data:
   }
 }
 ```
-````
+
 
 ## ⚙️ Setup and Installation
 
