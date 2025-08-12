@@ -90,3 +90,4 @@ Desktop.ini
 .idea/
 *.iml
 *.swp
+*.env
