@@ -2,6 +2,10 @@ from fastapi import FastAPI
 from app.api.v1.routes import router
 from fastapi.openapi.docs import get_swagger_ui_html
 from datetime import datetime
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 # Create the app without the default Swagger/Redoc
 app = FastAPI(
